@@ -7,6 +7,7 @@
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
+        <module name="response-status-code-apache-http-client" />
         <module name="shadowdom" />
         <module name="handling-stale-element-exceptions-in-selenium-java" />
       </profile>
