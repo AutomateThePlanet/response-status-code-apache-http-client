@@ -1,12 +1,8 @@
 import io.github.bonigarcia.wdm.WebDriverManager;
-import org.apache.hc.client5.http.classic.HttpClient;
-import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpHead;
 import org.apache.hc.client5.http.config.RequestConfig;
-import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
 import org.apache.hc.client5.http.impl.classic.HttpClientBuilder;
-import org.apache.hc.client5.http.impl.classic.HttpClients;
-import org.apache.hc.core5.http.HttpResponse;
 import org.apache.hc.core5.util.Timeout;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -18,17 +14,30 @@ import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
-import utilities.Wait;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
-import java.io.IOException;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import java.io.*;
+import java.net.*;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public class HttpStatusTests {
     private final int WAIT_FOR_ELEMENT_TIMEOUT = 30;
@@ -48,23 +57,17 @@ public class HttpStatusTests {
     }
 
     @Test
-    public void simpleRequest() throws IOException {
-        HttpURLConnection httpURLConnection = (HttpURLConnection)new URL("https://www.lambdatest.com/selenium-playground").openConnection();
-        httpURLConnection.setRequestMethod("HEAD");
-        httpURLConnection.connect();
-        int responseCode = httpURLConnection.getResponseCode();
+    public void simpleRequest_httpClient() throws URISyntaxException, IOException, InterruptedException {
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(new URI("https://www.lambdatest.com/selenium-playground"))
+                .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                .build();
 
-        System.out.println("Status Code: " + responseCode);
-    }
+        HttpResponse<Void> reponse = client.send(request, HttpResponse.BodyHandlers.discarding());
 
-    @Test
-    public void simpleRequest_httpClient() throws IOException {
-        CloseableHttpClient httpClient1 = HttpClients.createDefault();
-
-        HttpClient client = HttpClientBuilder.create().build();
-        HttpResponse response = client.execute(new HttpHead("https://www.lambdatest.com/selenium-playground"));
-
-        System.out.println("Status Code: " + response.getCode());
+        int statusCode = reponse.statusCode();
+        System.out.println("Status Code: " + statusCode);
     }
 
     @Test
@@ -75,138 +78,159 @@ public class HttpStatusTests {
                 .setConnectionRequestTimeout(Timeout.ofSeconds(30))
                 .setResponseTimeout(Timeout.ofSeconds(30)).build();
         try (var client = HttpClientBuilder.create().setDefaultRequestConfig(config).build()) {
-            HttpResponse response = client.execute(new HttpHead("https://www.lambdatest.com/selenium-playground"));
+            var response = client.execute(new HttpHead("https://www.lambdatest.com/selenium-playground"));
             System.out.println("Status Code: " + response.getCode());
         }
     }
 
     @Test
-    public void testHttpStatusCodes() throws IOException {
-        int successfulConnection = 0;
-        int failedConnection = 0;
+    public void checkSeleniumPlayground_for_brokenLinks() throws IOException, URISyntaxException {
+        int validLinks = 0;
+        int brokenLinks = 0;
         driver.get("https://www.lambdatest.com/selenium-playground");
+        List<WebElement> links = driver.findElements(By.tagName("a"));
+        List<String> links1 = driver.findElements(By.tagName("a")).stream().map(a -> a.getAttribute("href")).collect(Collectors.toList());
 
-        List<WebElement> formHref = driver.findElements(By.tagName("a"));
-
-        for(int i = 0; i < formHref.size(); i++)
-        {
-            String url = formHref.get(i).getAttribute("href");
-            HttpURLConnection httpURLConnection = (HttpURLConnection)new URL(url).openConnection();
-            httpURLConnection.setRequestMethod("HEAD");
-            httpURLConnection.connect();
-            int responseCode = httpURLConnection.getResponseCode();
-
-            if(responseCode == 200) {
-                System.out.println("Connection successfully to URL : " + url);
-                successfulConnection++;
+        var client = HttpClient.newHttpClient();
+        for(WebElement link : links) {
+            String url = link.getAttribute("href");
+            var request = HttpRequest.newBuilder()
+                    .uri(new URI(url))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                    .build();
+            try {
+                var response = client.send(request, HttpResponse.BodyHandlers.discarding());
+                if (response.statusCode() == 200) {
+                    System.out.println("Connection successfully to URL : " + url);
+                    validLinks++;
+                } else {
+                    System.out.println("Connection failed to URL : " + url + " with response code : " + response.statusCode());
+                    brokenLinks++;
+                }
+            } catch (IOException e) {
+                System.out.println("Connection failed to URL : " + url + " with error : " + e.getMessage());
+                brokenLinks++;
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
             }
-            else {
-                System.out.println("Connection failed to URL : " + url + " with response code : " + responseCode);
-                failedConnection++;
-            }
+
+            System.out.println("Detection of broken links completed with " + brokenLinks + " broken links and " + validLinks + " valid links\n");
         }
-
-        System.out.println("Number of Successful connections : " + successfulConnection);
-        System.out.println("Number of Failed connections : " + failedConnection);
     }
 
     @Test
-    public void createStaleElementReferenceException() {
-        driver.navigate().to("https://www.lambdatest.com/selenium-playground/");
-
-        WebElement pageLink = driver.findElement(By.linkText("Table Data Search"));
-        pageLink.click();
-        WebElement filterByField = driver.findElement(By.id("task-table-filter"));
-
-        filterByField.sendKeys("in progress");
-
-        driver.navigate().back();
-
-        pageLink.click();
-        filterByField.sendKeys("completed");
-    }
-
-    @Test
-    public void test_Selenium_Broken_Links() throws InterruptedException {
+    public void checkSeleniumPlayground_for_brokenLinks_optimized() throws IOException {
         driver.navigate().to("https://www.lambdatest.com/selenium-playground/");
         driver.manage().window().maximize();
         List<WebElement> links = driver.findElements(By.tagName("a"));
-        Iterator<WebElement> link = links.iterator();
 
-        String url = "";
-        HttpURLConnection urlconnection = null;
-        int responseCode = 200;
-        /* For skipping email address */
-        String mail_to = "mailto";
-        String tel ="tel";
-        String LinkedInPage = "https://www.linkedin.com";
-        int valid_links = 0;
-        int broken_links = 0;
-        Boolean bLinkedIn = false;
-        int LinkedInStatus = 999;
+        int validLinks = 0;
+        int brokenLinks = 0;
 
-        Pattern pattern = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,4}");
-        Matcher mat;
+        HttpClient client = HttpClient.newHttpClient();
 
-        while (link.hasNext())
-        {
-            url = link.next().getAttribute("href");
+        for (WebElement link : links) {
+            String url = link.getAttribute("href");
             System.out.println(url);
-            bLinkedIn = false;
+            boolean isLinkedInPage = false;
 
-            if ((url == null) || (url.isEmpty()))
-            {
+            if ((url == null) || (url.isEmpty())) {
                 System.out.println("URL is either not configured for anchor tag or it is empty");
                 continue;
             }
 
-            /* String str="mailto:support@LambdaTest.com"; */
-            if ((url.startsWith(mail_to)) || (url.startsWith(tel)))
-            {
+            if ((url.startsWith("mailto")) || (url.startsWith("tel"))) {
                 System.out.println("Email address or Telephone detected");
                 continue;
             }
 
-            if(url.startsWith(LinkedInPage))
-            {
+            if (url.startsWith("https://www.linkedin.com")) {
                 System.out.println("URL starts with LinkedIn, expected status code is 999");
-                bLinkedIn = true;
+                isLinkedInPage = true;
             }
 
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                    .build();
+
             try {
-                urlconnection = (HttpURLConnection) (new URL(url).openConnection());
-                urlconnection.setRequestMethod("HEAD");
-                urlconnection.connect();
-                responseCode = urlconnection.getResponseCode();
-                if (responseCode >= 400)
-                {
-                    /* https://stackoverflow.com/questions/27231113/999-error-code-on-head-request-to-linkedin */
-                    if ((bLinkedIn == true) && (responseCode == LinkedInStatus))
-                    {
+                var response = client.send(request, HttpResponse.BodyHandlers.discarding());
+                int responseCode = response.statusCode();
+
+                if (responseCode >= 400) {
+                    if (isLinkedInPage && responseCode == 999) {
                         System.out.println(url + " is a LinkedIn Page and is not a broken link");
-                        valid_links++;
-                    }
-                    else
-                    {
+                        validLinks++;
+                    } else {
                         System.out.println(url + " is a broken link");
-                        broken_links++;
+                        brokenLinks++;
                     }
-                }
-                else
-                {
+                } else {
                     System.out.println(url + " is a valid link");
-                    valid_links++;
+                    validLinks++;
                 }
-            } catch (MalformedURLException e) {
-                System.out.println(e.getMessage());
-                e.printStackTrace();
+
             } catch (IOException e) {
-                System.out.println(e.getMessage());
-                e.printStackTrace();
+                System.out.println("Connection failed to URL : " + url + " with error : " + e.getMessage());
+                brokenLinks++;
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
             }
         }
 
-        System.out.println("Detection of broken links completed with " + broken_links + " broken links and " + valid_links + " valid links\n");
+        System.out.println("Detection of broken links completed with " + brokenLinks + " broken links and " + validLinks + " valid links\n");
+    }
+
+    @Test
+    public void checkSeleniumPlaygroundWebsite_for_brokenLinks_using_sitemap() throws IOException, InterruptedException, ParserConfigurationException, SAXException {
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://www.lambdatest.com/sitemap.xml"))
+                .build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        // Parse sitemap and extract URLs
+        var factory = DocumentBuilderFactory.newInstance();
+        var builder = factory.newDocumentBuilder();
+        var doc = builder.parse(new InputSource(new StringReader(response.body())));
+        NodeList urlNodes = doc.getElementsByTagName("url");
+        List<String> urls = new ArrayList<>();
+        for (int i = 0; i < urlNodes.getLength(); i++) {
+            Node urlNode = urlNodes.item(i);
+            if (urlNode.getNodeType() == Node.ELEMENT_NODE) {
+                Element urlElement = (Element) urlNode;
+                urls.add(urlElement.getElementsByTagName("loc").item(0).getTextContent());
+            }
+        }
+
+        // Check broken links for each URL in parallel using ExecutorService
+        ExecutorService executorService = Executors.newFixedThreadPool(10);
+        AtomicInteger validLinksCount = new AtomicInteger(0);
+        AtomicInteger brokenLinksCount = new AtomicInteger(0);
+        urls.forEach(url -> {
+            executorService.submit(() -> {
+                try {
+                    HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+                    connection.setRequestMethod("HEAD");
+                    int responseCode = connection.getResponseCode();
+                    if (responseCode == HttpURLConnection.HTTP_OK) {
+                        System.out.println(url + " is a valid link");
+                        validLinksCount.getAndIncrement();
+                    } else {
+                        System.out.println(url + " is a broken link with response code: " + responseCode);
+                        brokenLinksCount.getAndIncrement();
+                    }
+                } catch (IOException e) {
+                    System.out.println("Exception while checking " + url + ": " + e.getMessage());
+                }
+            });
+        });
+
+        executorService.shutdown();
+        executorService.awaitTermination(10, TimeUnit.MINUTES);
+
+        System.out.println("Detection of broken links completed with " + brokenLinksCount.get() + " broken links and " + validLinksCount.get() + " valid links\n");
     }
 
     @AfterEach
